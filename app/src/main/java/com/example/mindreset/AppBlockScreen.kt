@@ -142,7 +142,7 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
         ) {
             items(viewModel.installedApps, key = { it.packageName }) { app ->
                 val isBlocked = blockedPackages.contains(app.packageName)
-                val limitMinutes = 60L
+                val limitMinutes = 2L  // Mode test : 2 minutes
                 val isBlockedEnabled = blockedPackages.contains(app.packageName)
                 val isOverLimit = app.usageMinutesToday >= limitMinutes
                 val remaining = (limitMinutes - app.usageMinutesToday).coerceAtLeast(0L)
@@ -168,7 +168,7 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
                                 modifier = Modifier
                                     .size(40.dp)
                                     .padding(end = 12.dp),
-                                contentScale = ContentScale.Crop
+                                contentScale = ContentScale.Fit
                             )
                         }
 
@@ -188,17 +188,6 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
                                 )
                             }
 
-                            if (isBlockedEnabled) {
-                                Text(
-                                    text = if (isOverLimit) {
-                                        "Blocage actif (limite dépassée)"
-                                    } else {
-                                        "Blocage armé: encore ${remaining} min avant blocage"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (isOverLimit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                                )
-                            }
                         }
 
                         Switch(
