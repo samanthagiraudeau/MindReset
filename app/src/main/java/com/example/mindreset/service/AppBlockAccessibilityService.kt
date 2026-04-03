@@ -8,7 +8,6 @@ import android.widget.Toast
 import com.example.mindreset.dao.AppDatabase
 import com.example.mindreset.models.AppUsageLog
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -16,19 +15,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import android.app.AppOpsManager
-import android.app.usage.UsageEvents
-import android.app.usage.UsageStatsManager
-import android.os.Process
 import android.util.Log
-import java.util.Calendar
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import android.os.Handler
 import android.os.Looper
-import kotlin.div
+import android.content.SharedPreferences
+import com.example.mindreset.settings.AppBlockSettingsStore
+import com.example.mindreset.settings.DEFAULT_COOLDOWN_MS
+import com.example.mindreset.settings.DEFAULT_GRACE_PERIOD_MS
+import com.example.mindreset.settings.DEFAULT_SESSION_LIMIT_MS
 
 class AppBlockAccessibilityService : AccessibilityService() {
 
@@ -37,14 +34,16 @@ class AppBlockAccessibilityService : AccessibilityService() {
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob())
+    private lateinit var settingsStore: AppBlockSettingsStore
+    private var settingsPrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
     private var blockedPackages: Set<String> = emptySet()
     private var currentPackage: String? = null
     private var currentOpenTime: Long? = null
 
     // Session + Grace + Cooldown
-    private val sessionLimitMs = 20 * 60L * 1000L // 20 minutes
-    private val gracePeriodMs = 60L * 1000L // 1 minute
-    private val cooldownMs = 15 * 60L * 1000L  // 15 minutes
+    private var sessionLimitMs = DEFAULT_SESSION_LIMIT_MS
+    private var gracePeriodMs = DEFAULT_GRACE_PERIOD_MS
+    private var cooldownMs = DEFAULT_COOLDOWN_MS
 
     private val sessionStartTimes = mutableMapOf<String, Long>()
     private val lastExitTimes = mutableMapOf<String, Long>()
@@ -53,7 +52,9 @@ class AppBlockAccessibilityService : AccessibilityService() {
     private var foregroundWatchJob: Job? = null
     private var watchedPackage: String? = null
     private val watchIntervalMs = 3000L  // 3 secondes
-
+    private val warningBeforeBlockMs = 2L * 60L * 1000L
+    private val warningChannelId = "app_block_warning"
+    private val warningShownForPackage = mutableSetOf<String>()
     private val homePackageName: String by lazy {
         val homeIntent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_HOME) }
         val resolved = packageManager.resolveActivity(homeIntent, 0)
@@ -107,7 +108,10 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        logDebug("🟢 Service connecté - Mode SESSION (2 min)")
+        settingsStore = AppBlockSettingsStore(applicationContext)
+        refreshSettings()
+        registerSettingsListener()
+        logDebug("🟢 Service connecté - Session=${formatMs(sessionLimitMs)}, grace=${formatMs(gracePeriodMs)}, cooldown=${formatMs(cooldownMs)}")
 
         serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
@@ -124,6 +128,27 @@ class AppBlockAccessibilityService : AccessibilityService() {
                     logDebug("📋 ${packages.size} app(s) bloquée(s)")
                 }
         }
+
+        ensureWarningChannel()
+    }
+
+    private fun refreshSettings() {
+        val settings = settingsStore.get()
+        sessionLimitMs = settings.sessionLimitMs.coerceAtLeast(1_000L)
+        gracePeriodMs = settings.gracePeriodMs.coerceAtLeast(0L)
+        cooldownMs = settings.cooldownMs.coerceAtLeast(1_000L)
+    }
+
+    private fun registerSettingsListener() {
+        val prefs = getSharedPreferences("app_block_settings", MODE_PRIVATE)
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "session_limit_ms" || key == "grace_period_ms" || key == "cooldown_ms") {
+                refreshSettings()
+                logDebug("⚙️ Parametres MAJ - session=${formatMs(sessionLimitMs)}, grace=${formatMs(gracePeriodMs)}, cooldown=${formatMs(cooldownMs)}")
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        settingsPrefsListener = listener
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -180,10 +205,12 @@ class AppBlockAccessibilityService : AccessibilityService() {
             if (existingStart == null) {
                 sessionStartTimes[openedPackage] = now
                 logDebug("🆕 INIT SESSION pour $openedPackage")
+                warningShownForPackage.remove(openedPackage)
             } else {
                 val lastExit = lastExitTimes[openedPackage]
                 if (lastExit == null) {
                     sessionStartTimes[openedPackage] = now
+                    warningShownForPackage.remove(openedPackage)
                     logDebug("♻️ RESET SESSION pour $openedPackage (sortie inconnue)")
                 } else {
                     val timeSinceExit = now - lastExit
@@ -215,17 +242,55 @@ class AppBlockAccessibilityService : AccessibilityService() {
         val sessionDuration = now - sessionStart
         val remaining = (sessionLimitMs - sessionDuration).coerceAtLeast(0L)
 
+        if (remaining in 1..warningBeforeBlockMs && !warningShownForPackage.contains(pkg)) {
+            showTwoMinutesWarning(pkg, remaining)
+            warningShownForPackage.add(pkg)
+        }
+
         logDebug("📊 EVAL: duration=${formatMs(sessionDuration)} / limit=${formatMs(sessionLimitMs)} | % ${(sessionDuration * 100 / sessionLimitMs).coerceIn(0, 100)}")
 
         if (sessionDuration >= sessionLimitMs) {
             cooldownStartTimes[pkg] = now
             sessionStartTimes.remove(pkg)
+            warningShownForPackage.remove(pkg)
             logDebug("🚫🚫🚫 LIMITE SESSION ATTEINTE -> Blocage + Cooldown de ${formatMs(cooldownMs)}")
             blockApp(pkg, blockMessages.random())
             return true
         }
 
         return false
+    }
+
+
+    private fun hasNotificationPermission(): Boolean {
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
+    private fun showTwoMinutesWarning(pkg: String, remainingMs: Long) {
+        if (!hasNotificationPermission()) return
+
+        val appName = try {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+        } catch (_: Exception) {
+            pkg
+        }
+
+        val notif = androidx.core.app.NotificationCompat.Builder(this, warningChannelId)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("Une pause ?")
+            .setContentText("$appName se fermera dans 2 minutes")
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .build()
+
+        val id = pkg.hashCode()
+        getSystemService(android.app.NotificationManager::class.java).notify(id, notif)
     }
 
     private fun startForegroundWatch(pkg: String) {
@@ -280,6 +345,20 @@ class AppBlockAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun ensureWarningChannel() {
+        val manager = getSystemService(android.app.NotificationManager::class.java)
+        if (manager.getNotificationChannel(warningChannelId) == null) {
+            val channel = android.app.NotificationChannel(
+                warningChannelId,
+                "Avertissement blocage",
+                android.app.NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alerte quand il reste 2 minutes avant blocage"
+            }
+            manager.createNotificationChannel(channel)
+        }
+    }
+
     private fun stopForegroundWatch(reason: String) {
         if (foregroundWatchJob?.isActive == true) {
             logDebug("🧹 Watch stop ($reason)")
@@ -320,6 +399,10 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         logDebug("🔴 Service détruit")
+        settingsPrefsListener?.let { listener ->
+            getSharedPreferences("app_block_settings", MODE_PRIVATE)
+                .unregisterOnSharedPreferenceChangeListener(listener)
+        }
         stopForegroundWatch("destroy")
         serviceScope.cancel()
         super.onDestroy()

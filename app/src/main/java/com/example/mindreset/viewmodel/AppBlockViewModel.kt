@@ -15,6 +15,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mindreset.dao.AppDatabase
 import com.example.mindreset.models.BlockedApp
+import com.example.mindreset.settings.AppBlockSettings
+import com.example.mindreset.settings.AppBlockSettingsStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -33,6 +35,7 @@ data class InstalledAppItem(
 
 class AppBlockViewModel(application: Application) : AndroidViewModel(application) {
     private val blockedDao = AppDatabase.getDatabase(application).blockedAppDao()
+    private val settingsStore = AppBlockSettingsStore(application)
     private val packageManager = application.packageManager
     private val usageStatsManager = application.getSystemService(UsageStatsManager::class.java)
     private val appOpsManager = application.getSystemService(AppOpsManager::class.java)
@@ -44,6 +47,9 @@ class AppBlockViewModel(application: Application) : AndroidViewModel(application
         private set
 
     var hasUsageAccess by mutableStateOf(false)
+        private set
+
+    var appBlockSettings by mutableStateOf(settingsStore.get())
         private set
 
     val blockedPackages = blockedDao.observeBlockedPackages().stateIn(
@@ -58,6 +64,26 @@ class AppBlockViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshUsage() {
         loadInstalledApps()
+        appBlockSettings = settingsStore.get()
+    }
+
+    fun updateAppBlockSettings(
+        sessionLimitMinutes: Long,
+        gracePeriodSeconds: Long,
+        cooldownMinutes: Long
+    ) {
+        val safeSessionMin = sessionLimitMinutes.coerceIn(1L, 240L)
+        val safeGraceSec = gracePeriodSeconds.coerceIn(0L, 300L)
+        val safeCooldownMin = cooldownMinutes.coerceIn(1L, 240L)
+
+        val updated = AppBlockSettings(
+            sessionLimitMs = safeSessionMin * 60_000L,
+            gracePeriodMs = safeGraceSec * 1_000L,
+            cooldownMs = safeCooldownMin * 60_000L
+        )
+
+        settingsStore.save(updated)
+        appBlockSettings = updated
     }
 
     private fun loadInstalledApps() {
@@ -144,7 +170,6 @@ class AppBlockViewModel(application: Application) : AndroidViewModel(application
             }
         }
 
-        // Ferme les sessions encore actives au moment du calcul.
         openSessionsByPackage.forEach { (pkg, start) ->
             if (now > start) {
                 totalsByPackage[pkg] = (totalsByPackage[pkg] ?: 0L) + (now - start)

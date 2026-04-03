@@ -6,6 +6,7 @@ import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,10 +16,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,6 +42,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
@@ -43,15 +50,27 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mindreset.service.AppBlockAccessibilityService
 import com.example.mindreset.viewmodel.AppBlockViewModel
-import kotlin.compareTo
 
 @Composable
-fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
+fun AppBlockScreen(
+    viewModel: AppBlockViewModel = viewModel(),
+    showSettings: Boolean = false,
+    onSettingsDismiss: () -> Unit = {}
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val blockedPackages by viewModel.blockedPackages.collectAsState()
 
     var isServiceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+
+    val settings = viewModel.appBlockSettings
+    val sessionMinutesCurrent = (settings.sessionLimitMs / 60_000L).coerceAtLeast(1L)
+    val graceSecondsCurrent = (settings.gracePeriodMs / 1_000L).coerceAtLeast(0L)
+    val cooldownMinutesCurrent = (settings.cooldownMs / 60_000L).coerceAtLeast(1L)
+
+    var sessionMinutesInput by remember(settings.sessionLimitMs) { mutableStateOf(sessionMinutesCurrent.toString()) }
+    var graceSecondsInput by remember(settings.gracePeriodMs) { mutableStateOf(graceSecondsCurrent.toString()) }
+    var cooldownMinutesInput by remember(settings.cooldownMs) { mutableStateOf(cooldownMinutesCurrent.toString()) }
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
@@ -64,7 +83,18 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    if (viewModel.isLoading) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
+
         if (!isServiceEnabled) {
             Card(
                 modifier = Modifier
@@ -81,7 +111,7 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Pour bloquer l'ouverture d'une app, active le service d'accessibilité MindReset dans les paramètres Android.",
+                        text = "Pour bloquer l'ouverture d'une app, active le service d'accessibilite MindReset dans les parametres Android.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     TextButton(
@@ -89,7 +119,7 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
                             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                         }
                     ) {
-                        Text("Ouvrir les paramètres d'accessibilité")
+                        Text("Ouvrir les parametres d'accessibilite")
                     }
                 }
             }
@@ -104,12 +134,12 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Activer le temps d'utilisation système",
+                        text = "Activer le temps d'utilisation systeme",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Autorise l'accès aux données d'utilisation pour afficher le temps passé par app aujourd'hui.",
+                        text = "Autorise l'acces aux donnees d'utilisation pour afficher le temps passe par app aujourd'hui.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     TextButton(
@@ -117,22 +147,10 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
                             context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                         }
                     ) {
-                        Text("Ouvrir l'accès d'utilisation")
+                        Text("Ouvrir l'acces d'utilisation")
                     }
                 }
             }
-        }
-
-        if (viewModel.isLoading) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 32.dp),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                CircularProgressIndicator()
-            }
-            return
         }
 
         LazyColumn(
@@ -142,11 +160,6 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
         ) {
             items(viewModel.installedApps, key = { it.packageName }) { app ->
                 val isBlocked = blockedPackages.contains(app.packageName)
-                val limitMinutes = 2L  // Mode test : 2 minutes
-                val isBlockedEnabled = blockedPackages.contains(app.packageName)
-                val isOverLimit = app.usageMinutesToday >= limitMinutes
-                val remaining = (limitMinutes - app.usageMinutesToday).coerceAtLeast(0L)
-
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -179,7 +192,6 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
                                 fontWeight = FontWeight.SemiBold
                             )
 
-                            // Afficher le temps d'utilisation
                             if (app.usageMinutesToday > 0L) {
                                 Text(
                                     text = "${app.usageMinutesToday}m aujourd'hui",
@@ -187,7 +199,6 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
                                     color = MaterialTheme.colorScheme.secondary
                                 )
                             }
-
                         }
 
                         Switch(
@@ -201,6 +212,99 @@ fun AppBlockScreen(viewModel: AppBlockViewModel = viewModel()) {
                 }
             }
         }
+    }
+
+    if (showSettings) {
+        AlertDialog(
+            onDismissRequest = { onSettingsDismiss() },
+            //containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            titleContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            textContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            title = { Text("Paramètres de blocage") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Quand une application est activée, tu peux l'utiliser pendant la durée de session. Une fois la durée dépassée, l'application se bloque pour la durée de pause. Un délai de reprise est possible, pour sortir de l'application et y revenir sans perdre le temps de session déjà passé.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = sessionMinutesInput,
+                        onValueChange = { sessionMinutesInput = it.filter(Char::isDigit) },
+                        label = { Text("Durée session (minutes)") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            unfocusedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            focusedLabelColor = MaterialTheme.colorScheme.primary,
+                            cursorColor = MaterialTheme.colorScheme.primary
+                        ),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                        ),
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = cooldownMinutesInput,
+                        onValueChange = { cooldownMinutesInput = it.filter(Char::isDigit) },
+                        label = { Text("Pause (minutes)") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            unfocusedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            focusedLabelColor = MaterialTheme.colorScheme.primary,
+                            cursorColor = MaterialTheme.colorScheme.primary
+                        ),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                        ),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = graceSecondsInput,
+                        onValueChange = { graceSecondsInput = it.filter(Char::isDigit) },
+                        label = { Text("Délai de reprise (secondes)") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            unfocusedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            focusedLabelColor = MaterialTheme.colorScheme.primary,
+                            cursorColor = MaterialTheme.colorScheme.primary
+                        ),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                        ),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val sessionMin = sessionMinutesInput.toLongOrNull() ?: sessionMinutesCurrent
+                        val graceSec = graceSecondsInput.toLongOrNull() ?: graceSecondsCurrent
+                        val cooldownMin = cooldownMinutesInput.toLongOrNull() ?: cooldownMinutesCurrent
+
+                        viewModel.updateAppBlockSettings(
+                            sessionLimitMinutes = sessionMin,
+                            gracePeriodSeconds = graceSec,
+                            cooldownMinutes = cooldownMin
+                        )
+                        onSettingsDismiss()
+                    }
+                ) {
+                    Text("Enregistrer")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { onSettingsDismiss() }) {
+                    Text("Annuler")
+                }
+            }
+        )
     }
 }
 

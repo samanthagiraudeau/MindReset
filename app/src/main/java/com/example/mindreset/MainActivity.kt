@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Brightness4
 import androidx.compose.material.icons.filled.Brightness7
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             var darkTheme by remember { mutableStateOf(false) }
+            var showAppBlockSettings by remember { mutableStateOf(false) }
 
             MindResetTheme(darkTheme = darkTheme) {
                 val navController = rememberNavController()
@@ -51,6 +53,15 @@ class MainActivity : ComponentActivity() {
                                 Text(currentScreen?.title ?: "MindReset")
                             },
                             actions = {
+                                val isOnAppBlock = currentDestination?.route == Screen.AppBlock.route
+                                if (isOnAppBlock) {
+                                    IconButton(onClick = { showAppBlockSettings = true }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Settings,
+                                            contentDescription = "Paramètres de blocage"
+                                        )
+                                    }
+                                }
                                 IconButton(onClick = { darkTheme = !darkTheme }) {
                                     Icon(
                                         imageVector = if (darkTheme) Icons.Default.Brightness7 else Icons.Default.Brightness4,
@@ -92,7 +103,12 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.padding(innerPadding)
                     ) {
                         composable(Screen.Timer.route) { TimerScreen() }
-                        composable(Screen.AppBlock.route) { AppBlockScreen() }
+                        composable(Screen.AppBlock.route) {
+                            AppBlockScreen(
+                                showSettings = showAppBlockSettings,
+                                onSettingsDismiss = { showAppBlockSettings = false }
+                            )
+                        }
                         composable(Screen.ThoughtsList.route) { ThoughtsListScreen() }
                         composable(Screen.Reminders.route) { RemindersScreen() }
                     }
