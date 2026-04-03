@@ -111,7 +111,7 @@ fun AppBlockScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Pour bloquer l'ouverture d'une app, active le service d'accessibilite MindReset dans les parametres Android.",
+                        text = "Pour bloquer l'ouverture d'une application, active le service d'accessibilité MindReset dans les paramètres Android.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     TextButton(
@@ -119,7 +119,7 @@ fun AppBlockScreen(
                             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                         }
                     ) {
-                        Text("Ouvrir les parametres d'accessibilite")
+                        Text("Ouvrir les paramètres d'accessibilité")
                     }
                 }
             }
