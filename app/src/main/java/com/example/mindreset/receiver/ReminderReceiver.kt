@@ -31,6 +31,8 @@ class ReminderReceiver : BroadcastReceiver() {
         val time = intent.getStringExtra("time") ?: ""
         val id = intent.getIntExtra("id", -1)
         val action = intent.action ?: ACTION_TRIGGER
+        val date = intent.getStringExtra("date") ?: ""
+        val isDaily = intent.getBooleanExtra("isDaily", false)
         val channelId = "reminders_channel"
         val now = System.currentTimeMillis()
 
@@ -47,7 +49,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 when (action) {
                     ACTION_REENABLE -> {
                         if (id != -1) {
-                            dao.update(Reminder(id = id, time = time, label = label, isEnabled = true))
+                            dao.update(Reminder(id = id, time = time, label = label, isEnabled = true, date = date, isDaily = isDaily))
                             logDebug("db update re-enable id=$id at ${formatTs(System.currentTimeMillis())}")
                         }
                     }
@@ -78,13 +80,13 @@ class ReminderReceiver : BroadcastReceiver() {
                         logDebug("notification sent id=$id label='$label' at ${formatTs(System.currentTimeMillis())}")
 
                         if (id != -1) {
-                            dao.update(Reminder(id = id, time = time, label = label, isEnabled = false))
+                            dao.update(Reminder(id = id, time = time, label = label, isEnabled = false, date = date, isDaily = isDaily))
                             logDebug("db update disable id=$id at ${formatTs(System.currentTimeMillis())}")
                             scheduleReEnableInOneMinute(context, id, time, label)
                         }
 
-                        if (id != -1 && time.isNotEmpty()) {
-                            rescheduleNext(context, id, time, label)
+                        if (id != -1 && time.isNotEmpty() && isDaily) {
+                            rescheduleNext(context, id, time, label, date)
                         }
                     }
                 }
@@ -135,7 +137,7 @@ class ReminderReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun rescheduleNext(context: Context, id: Int, time: String, label: String) {
+    private fun rescheduleNext(context: Context, id: Int, time: String, label: String, date: String) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val timeParts = time.split(":")
         
@@ -151,6 +153,8 @@ class ReminderReceiver : BroadcastReceiver() {
             putExtra("id", id)
             putExtra("label", label)
             putExtra("time", time)
+            putExtra("date", date)
+            putExtra("isDaily", true)
         }
 
         val pendingIntent = PendingIntent.getBroadcast(

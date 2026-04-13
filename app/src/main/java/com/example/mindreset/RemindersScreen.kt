@@ -24,6 +24,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mindreset.models.Reminder
 import androidx.compose.foundation.lazy.items
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.text.format
+import kotlin.toString
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +43,9 @@ fun RemindersScreen(viewModel: RemindersViewModel = viewModel()) {
         initialMinute = currentTime.get(Calendar.MINUTE),
         is24Hour = true
     )
+    var isDaily by remember { mutableStateOf(true) }
+    var selectedDateMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var showDatePicker by remember { mutableStateOf(false) }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -53,33 +61,70 @@ fun RemindersScreen(viewModel: RemindersViewModel = viewModel()) {
     ) { innerPadding ->
         // --- LOGIQUE DU DIALOGUE ---
         if (showTimePicker) {
-            // Pour mettre le focus dans l'input de texte
             val focusRequester = remember { FocusRequester() }
+            val selectedDateLabel = remember(selectedDateMillis) {
+                SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(Date(selectedDateMillis))
+            }
 
-            // Lancer le focus dès qu'on ouvre la modale
             LaunchedEffect(Unit) {
-                // pour demander le focus quand l'horloge est chargée
                 kotlinx.coroutines.delay(300)
                 focusRequester.requestFocus()
             }
+
+            if (showDatePicker) {
+                val datePickerState = rememberDatePickerState(
+                    initialSelectedDateMillis = selectedDateMillis
+                )
+
+                DatePickerDialog(
+                    onDismissRequest = { showDatePicker = false },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                selectedDateMillis =
+                                    datePickerState.selectedDateMillis ?: System.currentTimeMillis()
+                                showDatePicker = false
+                            }
+                        ) { Text("OK") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDatePicker = false }) { Text("Annuler") }
+                    }
+                ) {
+                    DatePicker(state = datePickerState)
+                }
+            }
+
             TimePickerDialog(
                 onDismissRequest = {
                     showTimePicker = false
                     reminderLabel = ""
+                    isDaily = false
+                    selectedDateMillis = System.currentTimeMillis()
                 },
                 onConfirm = {
+                    val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                        .format(Date(selectedDateMillis))
                     val hour = timePickerState.hour.toString().padStart(2, '0')
                     val minute = timePickerState.minute.toString().padStart(2, '0')
-                    viewModel.addReminder(time = "$hour:$minute", label = if(reminderLabel.isNotBlank()) reminderLabel else "C'était quoi déjà ?")
+
+                    viewModel.addReminder(
+                        time = "$hour:$minute",
+                        label = if (reminderLabel.isNotBlank()) reminderLabel else "C'était quoi déjà ?",
+                        date = date,
+                        isDaily = isDaily
+                    )
+
                     showTimePicker = false
                     reminderLabel = ""
-
+                    isDaily = false
+                    selectedDateMillis = System.currentTimeMillis()
                 }
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp) // Espace entre le texte et l'horloge
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     OutlinedTextField(
                         value = reminderLabel,
@@ -92,16 +137,33 @@ fun RemindersScreen(viewModel: RemindersViewModel = viewModel()) {
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .focusRequester(focusRequester) // on met le focus ici
+                            .focusRequester(focusRequester)
                     )
 
-                    TimeInput(state = timePickerState,
+                    OutlinedButton(
+                        onClick = { showDatePicker = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Date : $selectedDateLabel")
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Rappel quotidien")
+                        Switch(
+                            checked = isDaily,
+                            onCheckedChange = { isDaily = it }
+                        )
+                    }
+
+                    TimeInput(
+                        state = timePickerState,
                         colors = TimePickerDefaults.colors(
-                            // Couleurs quand on clique sur l'heure ou la minute
                             timeSelectorSelectedContentColor = MaterialTheme.colorScheme.primary,
                             timeSelectorSelectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-
-                            // Couleurs des cases quand elles ne sont pas actives
                             timeSelectorUnselectedContentColor = MaterialTheme.colorScheme.secondary,
                             timeSelectorUnselectedContainerColor = MaterialTheme.colorScheme.secondaryContainer
                         )
@@ -160,6 +222,13 @@ fun TimePickerDialog(
 
 @Composable
 fun ReminderItem(reminder: Reminder, onDelete: () -> Unit, onToggle: (Boolean) -> Unit) {
+    val displayDate = reminder.date.toDisplayDate()
+    val scheduleText = if (reminder.isDaily) {
+        "Tous les jours à partir de $displayDate"
+    } else {
+        "Le $displayDate à ${reminder.time}"
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -185,6 +254,11 @@ fun ReminderItem(reminder: Reminder, onDelete: () -> Unit, onToggle: (Boolean) -
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Text(
+                    text = scheduleText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -202,4 +276,9 @@ fun ReminderItem(reminder: Reminder, onDelete: () -> Unit, onToggle: (Boolean) -
             }
         }
     }
+}
+
+private fun String.toDisplayDate(): String {
+    val parts = split("-")
+    return if (parts.size == 3) "${parts[2]}/${parts[1]}/${parts[0]}" else this
 }

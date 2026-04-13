@@ -18,6 +18,8 @@ import com.example.mindreset.receiver.ReminderReceiver
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.compareTo
+import kotlin.text.set
 
 class RemindersViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
@@ -36,10 +38,10 @@ class RemindersViewModel(application: Application) : AndroidViewModel(applicatio
         initialValue = emptyList()
     )
 
-    fun addReminder(time: String, label: String) {
+    fun addReminder(time: String, label: String, date: String, isDaily: Boolean) {
         viewModelScope.launch {
-            val newId = dao.insert(Reminder(time = time, label = label))
-            val createdReminder = Reminder(id = newId.toInt(), time = time, label = label)
+            val newId = dao.insert(Reminder(time = time, label = label, date = date, isDaily = isDaily))
+            val createdReminder = Reminder(id = newId.toInt(), time = time, label = label, date = date, isDaily = isDaily)
             logDebug("add reminder id=${createdReminder.id} label='$label' time=$time")
             scheduleNotification(createdReminder)
         }
@@ -68,7 +70,7 @@ class RemindersViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun scheduleNotification(reminder: Reminder) {
         val intent = createPendingIntent(reminder)
-        val triggerTime = calculateTriggerTime(reminder.time)
+        val triggerTime = calculateTriggerTime(reminder)
         logDebug(
             "schedule id=${reminder.id} label='${reminder.label}' triggerAt=${formatTs(triggerTime)}"
         )
@@ -79,6 +81,11 @@ class RemindersViewModel(application: Application) : AndroidViewModel(applicatio
                 alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, intent)
                 return
             }
+        }
+
+        // ponctuel déjà passé => on ne planifie pas
+        if (!reminder.isDaily && triggerTime <= System.currentTimeMillis()) {
+            return
         }
 
         try {
@@ -106,6 +113,8 @@ class RemindersViewModel(application: Application) : AndroidViewModel(applicatio
             putExtra("id", reminder.id)
             putExtra("label", reminder.label)
             putExtra("time", reminder.time)
+            putExtra("date", reminder.date)
+            putExtra("isDaily", reminder.isDaily)
         }
         return PendingIntent.getBroadcast(
             getApplication(),
@@ -134,18 +143,27 @@ class RemindersViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    private fun calculateTriggerTime(time: String): Long {
-        val timeParts = time.split(":")
-        val trigger = Calendar.getInstance().apply {
+    private fun calculateTriggerTime(reminder: Reminder): Long {
+        val dateParts = reminder.date.split("-")
+        val timeParts = reminder.time.split(":")
+
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.YEAR, dateParts[0].toInt())
+            set(Calendar.MONTH, dateParts[1].toInt() - 1)
+            set(Calendar.DAY_OF_MONTH, dateParts[2].toInt())
             set(Calendar.HOUR_OF_DAY, timeParts[0].toInt())
             set(Calendar.MINUTE, timeParts[1].toInt())
             set(Calendar.SECOND, 0)
-            if (before(Calendar.getInstance())) {
-                add(Calendar.DATE, 1)
-            }
-        }.timeInMillis
-        logDebug("calculate trigger time input=$time result=${formatTs(trigger)}")
-        return trigger
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        val now = System.currentTimeMillis()
+        if (reminder.isDaily) {
+            while (cal.timeInMillis <= now) cal.add(Calendar.DATE, 1)
+        }
+        logDebug("calculate trigger time input=$reminder.time result=${formatTs(cal.timeInMillis)}")
+
+        return cal.timeInMillis
     }
 
     private fun logDebug(message: String) {

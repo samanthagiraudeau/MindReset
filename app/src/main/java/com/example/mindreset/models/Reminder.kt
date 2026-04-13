@@ -8,5 +8,7 @@ data class Reminder(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val time: String,
     val label: String,
+    val date: String,          // yyyy-MM-dd
+    val isDaily: Boolean = false, // false = une seule fois, true = quotidien
     val isEnabled: Boolean = true
 )
