@@ -217,7 +217,6 @@ fun AppBlockScreen(
     if (showSettings) {
         AlertDialog(
             onDismissRequest = { onSettingsDismiss() },
-            //containerColor = MaterialTheme.colorScheme.secondaryContainer,
             titleContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
             textContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
             title = { Text("Paramètres de blocage") },

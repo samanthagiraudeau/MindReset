@@ -36,4 +36,3 @@ class AppBlockSettingsStore(context: Context) {
             .apply()
     }
 }
-

@@ -160,8 +160,6 @@ fun TimePickerDialog(
 
 @Composable
 fun ReminderItem(reminder: Reminder, onDelete: () -> Unit, onToggle: (Boolean) -> Unit) {
-    var checked by remember { mutableStateOf(reminder.isEnabled) }
-
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -191,8 +189,8 @@ fun ReminderItem(reminder: Reminder, onDelete: () -> Unit, onToggle: (Boolean) -
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(
-                    checked = checked,
-                    onCheckedChange = { checked = it }
+                    checked = reminder.isEnabled,
+                    onCheckedChange = { onToggle(it) }
                 )
                 IconButton(onClick = onDelete) {
                     Icon(

@@ -9,12 +9,17 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.mindreset.models.BlockedApp
 import com.example.mindreset.models.Reminder
 import com.example.mindreset.models.AppUsageLog
+import com.example.mindreset.models.ThoughtList
 
-@Database(entities = [Reminder::class, BlockedApp::class, AppUsageLog::class], version = 3)
+@Database(
+    entities = [Reminder::class, BlockedApp::class, AppUsageLog::class, ThoughtList::class],
+    version = 4
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun reminderDao(): ReminderDao
     abstract fun blockedAppDao(): BlockedAppDao
     abstract fun appUsageLogDao(): AppUsageLogDao
+    abstract fun thoughtListDao(): ThoughtListDao
 
     companion object {
         @Volatile
@@ -49,6 +54,21 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS thought_lists (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        title TEXT NOT NULL,
+                        text TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -56,7 +76,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "mindreset_db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                 INSTANCE = instance
                 instance

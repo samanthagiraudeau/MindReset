@@ -13,10 +13,20 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import com.example.mindreset.receiver.ReminderReceiver
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 class RemindersViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        private const val TAG = "MindReset-Reminder"
+        private const val ACTION_TRIGGER = "com.example.mindreset.receiver.action.TRIGGER"
+        private const val ACTION_REENABLE = "com.example.mindreset.receiver.action.REENABLE"
+        private const val REENABLE_REQUEST_CODE_OFFSET = 100_000
+    }
+
     private val dao = AppDatabase.getDatabase(application).reminderDao()
     private val alarmManager = application.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
@@ -29,42 +39,47 @@ class RemindersViewModel(application: Application) : AndroidViewModel(applicatio
     fun addReminder(time: String, label: String) {
         viewModelScope.launch {
             val newId = dao.insert(Reminder(time = time, label = label))
-
-            // On crée un objet temporaire avec le bon ID pour l'alarme
             val createdReminder = Reminder(id = newId.toInt(), time = time, label = label)
-
-            // On planifie la notification
+            logDebug("add reminder id=${createdReminder.id} label='$label' time=$time")
             scheduleNotification(createdReminder)
         }
     }
 
     fun deleteReminder(reminder: Reminder) {
         viewModelScope.launch {
+            logDebug("delete reminder id=${reminder.id} label='${reminder.label}'")
+            cancelNotification(reminder)
             dao.delete(reminder)
         }
     }
 
     fun toggleReminder(reminder: Reminder, isEnabled: Boolean) {
         viewModelScope.launch {
-            dao.update(reminder.copy(isEnabled = isEnabled))
+            val updatedReminder = reminder.copy(isEnabled = isEnabled)
+            dao.update(updatedReminder)
+            logDebug("toggle reminder id=${reminder.id} enabled=$isEnabled")
+            if (isEnabled) {
+                scheduleNotification(updatedReminder)
+            } else {
+                cancelNotification(updatedReminder)
+            }
         }
     }
 
     fun scheduleNotification(reminder: Reminder) {
-        // Vérification de la permission pour Android 12+ (S)
+        val intent = createPendingIntent(reminder)
+        val triggerTime = calculateTriggerTime(reminder.time)
+        logDebug(
+            "schedule id=${reminder.id} label='${reminder.label}' triggerAt=${formatTs(triggerTime)}"
+        )
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (!alarmManager.canScheduleExactAlarms()) {
-                // Optionnel : Rediriger l'utilisateur vers les paramètres ici
-                // Pour l'instant on utilise setAndAllowWhileIdle (moins précis mais pas de crash)
-                val intent = createPendingIntent(reminder)
-                val triggerTime = calculateTriggerTime(reminder.time)
+                logDebug("schedule fallback setAndAllowWhileIdle id=${reminder.id} exactAlarmDenied=true")
                 alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, intent)
                 return
             }
         }
-
-        val intent = createPendingIntent(reminder)
-        val triggerTime = calculateTriggerTime(reminder.time)
 
         try {
             alarmManager.setExactAndAllowWhileIdle(
@@ -72,31 +87,56 @@ class RemindersViewModel(application: Application) : AndroidViewModel(applicatio
                 triggerTime,
                 intent
             )
-        } catch (e: SecurityException) {
+            logDebug("schedule exact id=${reminder.id}")
+        } catch (_: SecurityException) {
             alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, intent)
+            logDebug("schedule fallback exception setAndAllowWhileIdle id=${reminder.id}")
         }
     }
 
     private fun cancelNotification(reminder: Reminder) {
-        val intent = createPendingIntent(reminder)
-        alarmManager.cancel(intent)
+        logDebug("cancel id=${reminder.id} mainRequest=${reminder.id} reEnableRequest=${reminder.id + REENABLE_REQUEST_CODE_OFFSET}")
+        alarmManager.cancel(createPendingIntent(reminder))
+        alarmManager.cancel(createReEnablePendingIntent(reminder))
     }
 
     private fun createPendingIntent(reminder: Reminder): PendingIntent {
         val intent = Intent(getApplication(), ReminderReceiver::class.java).apply {
+            action = ACTION_TRIGGER
+            putExtra("id", reminder.id)
             putExtra("label", reminder.label)
+            putExtra("time", reminder.time)
         }
         return PendingIntent.getBroadcast(
             getApplication(),
             reminder.id,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        ).also {
+            logDebug("pendingIntent trigger created id=${reminder.id} action=$ACTION_TRIGGER")
+        }
+    }
+
+    private fun createReEnablePendingIntent(reminder: Reminder): PendingIntent {
+        val intent = Intent(getApplication(), ReminderReceiver::class.java).apply {
+            action = ACTION_REENABLE
+            putExtra("id", reminder.id)
+            putExtra("label", reminder.label)
+            putExtra("time", reminder.time)
+        }
+        return PendingIntent.getBroadcast(
+            getApplication(),
+            reminder.id + REENABLE_REQUEST_CODE_OFFSET,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        ).also {
+            logDebug("pendingIntent re-enable created id=${reminder.id} action=$ACTION_REENABLE")
+        }
     }
 
     private fun calculateTriggerTime(time: String): Long {
         val timeParts = time.split(":")
-        return Calendar.getInstance().apply {
+        val trigger = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, timeParts[0].toInt())
             set(Calendar.MINUTE, timeParts[1].toInt())
             set(Calendar.SECOND, 0)
@@ -104,6 +144,16 @@ class RemindersViewModel(application: Application) : AndroidViewModel(applicatio
                 add(Calendar.DATE, 1)
             }
         }.timeInMillis
+        logDebug("calculate trigger time input=$time result=${formatTs(trigger)}")
+        return trigger
     }
 
+    private fun logDebug(message: String) {
+        Log.d(TAG, message)
+    }
+
+    private fun formatTs(epochMs: Long): String {
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        return "${sdf.format(Date(epochMs))} ($epochMs)"
+    }
 }
