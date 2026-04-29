@@ -24,6 +24,7 @@ import android.os.Handler
 import android.os.Looper
 import android.content.SharedPreferences
 import android.view.inputmethod.InputMethodManager
+import com.example.mindreset.BlockChallengeActivity
 import com.example.mindreset.settings.AppBlockSettingsStore
 import com.example.mindreset.settings.DEFAULT_COOLDOWN_MS
 import com.example.mindreset.settings.DEFAULT_GRACE_PERIOD_MS
@@ -34,6 +35,14 @@ class AppBlockAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "MindReset-Session"
         private const val WATCH_INTERVAL_MS = 2000L
+        private const val CHALLENGE_BYPASS_MS = 10_000L
+
+        @Volatile
+        private var activeService: AppBlockAccessibilityService? = null
+
+        fun onChallengeResult(packageName: String, success: Boolean) {
+            activeService?.handleChallengeResult(packageName, success)
+        }
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob())
@@ -51,6 +60,8 @@ class AppBlockAccessibilityService : AccessibilityService() {
     private val sessionStartTimes = mutableMapOf<String, Long>()
     private val lastExitTimes = mutableMapOf<String, Long>()
     private val cooldownStartTimes = mutableMapOf<String, Long>()
+    private val challengeBypassUntil = mutableMapOf<String, Long>()
+    private var currentChallengePackage: String? = null
 
     private var globalWatchJob: Job? = null
     private val warningBeforeBlockMs = 2L * 60L * 1000L
@@ -110,6 +121,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        activeService = this
         settingsStore = AppBlockSettingsStore(applicationContext)
         refreshSettings()
         registerSettingsListener()
@@ -126,8 +138,10 @@ class AppBlockAccessibilityService : AccessibilityService() {
                 .blockedAppDao()
                 .observeBlockedPackages()
                 .collectLatest { packages ->
-                    blockedPackages = packages.toSet()
-                    logDebug("📋 ${packages.size} app(s) bloquée(s)")
+                    blockedPackages = packages
+                        .filterNot { it == packageName }
+                        .toSet()
+                    logDebug("📋 ${blockedPackages.size} app(s) bloquée(s)")
                 }
         }
 
@@ -162,6 +176,16 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
         if (openedPackage.isBlank()) return
 
+        if (
+            openedPackage == packageName ||
+            openedPackage == "com.android.systemui" ||
+            openedPackage == homePackageName
+        ) {
+            currentPackage = openedPackage
+            currentOpenTime = now
+            return
+        }
+
         // --- CORRECTION CLAVIER ---
         if (isKeyboard(openedPackage)) {
             logDebug("⌨️ Clavier détecté ($openedPackage), on garde le focus sur $currentPackage")
@@ -180,6 +204,11 @@ class AppBlockAccessibilityService : AccessibilityService() {
             }
             currentPackage = openedPackage
             currentOpenTime = now
+
+            if (isChallengeBypassed(openedPackage, now)) {
+                logDebug("✅ Bypass challenge actif pour $openedPackage")
+                return
+            }
 
             // 2. Vérification immédiate du Cooldown à l'ouverture
             checkCooldownImmediately(openedPackage, now)
@@ -224,6 +253,10 @@ class AppBlockAccessibilityService : AccessibilityService() {
                 val now = System.currentTimeMillis()
 
                 if (pkg != null && blockedPackages.contains(pkg)) {
+                    if (isChallengeBypassed(pkg, now)) {
+                        delay(WATCH_INTERVAL_MS)
+                        continue
+                    }
                     // L'arbitre vérifie si on doit bloquer
                     evaluateSessionAndMaybeBlock(pkg, now)
                 }
@@ -261,6 +294,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
     }
 
     private fun checkCooldownImmediately(pkg: String, now: Long) {
+        if (isChallengeBypassed(pkg, now)) return
         val cooldownStart = cooldownStartTimes[pkg] ?: return
         val elapsed = now - cooldownStart
         if (elapsed < cooldownMs) {
@@ -323,11 +357,69 @@ class AppBlockAccessibilityService : AccessibilityService() {
     }
 
     private fun blockApp(pkg: String, message: String) {
-        logDebug("🏠 Blocage $pkg: Toast + redirection home")
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
-            performGlobalAction(GLOBAL_ACTION_HOME)
+        showBlockChallenge(pkg, message)
+    }
+
+    private fun showBlockChallenge(pkg: String, message: String) {
+        if (currentChallengePackage == pkg) {
+            logDebug("🧩 Challenge déjà affiché pour $pkg")
+            return
         }
+        currentChallengePackage = pkg
+
+        val intent = Intent(this, BlockChallengeActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(BlockChallengeActivity.EXTRA_PACKAGE_NAME, pkg)
+            putExtra(BlockChallengeActivity.EXTRA_BLOCK_MESSAGE, message)
+        }
+
+        try {
+            startActivity(intent)
+            logDebug("🧩 Ouverture challenge pour $pkg")
+        } catch (e: Exception) {
+            logDebug("❌ Impossible d'ouvrir la modale challenge: ${e.message}")
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            }
+            currentChallengePackage = null
+        }
+    }
+
+    private fun handleChallengeResult(pkg: String, success: Boolean) {
+        val now = System.currentTimeMillis()
+        currentChallengePackage = null
+
+        if (!success) {
+            logDebug("❌ Réponse fausse pour $pkg: blocage maintenu")
+            Handler(Looper.getMainLooper()).post {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            }
+            return
+        }
+
+        logDebug("✅ Réponse juste pour $pkg: reset cooldown/session et relance app")
+        cooldownStartTimes.remove(pkg)
+        warningShownForPackage.remove(pkg)
+        sessionStartTimes[pkg] = now
+        challengeBypassUntil[pkg] = now + CHALLENGE_BYPASS_MS
+
+        Handler(Looper.getMainLooper()).post {
+            val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                startActivity(launchIntent)
+            } else {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            }
+        }
+    }
+
+    private fun isChallengeBypassed(pkg: String, now: Long): Boolean {
+        val until = challengeBypassUntil[pkg] ?: return false
+        if (now <= until) return true
+        challengeBypassUntil.remove(pkg)
+        return false
     }
 
     private fun logAppUsage(packageName: String, openedAt: Long, closedAt: Long) {
@@ -353,6 +445,9 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         logDebug("🔴 Service détruit")
+        if (activeService === this) {
+            activeService = null
+        }
         settingsPrefsListener?.let { listener ->
             getSharedPreferences("app_block_settings", MODE_PRIVATE)
                 .unregisterOnSharedPreferenceChangeListener(listener)

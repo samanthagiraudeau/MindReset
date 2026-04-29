@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
@@ -50,10 +51,18 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mindreset.service.AppBlockAccessibilityService
 import com.example.mindreset.viewmodel.AppBlockViewModel
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.livedata.observeAsState
+import com.example.mindreset.quiz.QuizViewModel
 
 @Composable
 fun AppBlockScreen(
     viewModel: AppBlockViewModel = viewModel(),
+    quizVM: QuizViewModel = viewModel(),
     showSettings: Boolean = false,
     onSettingsDismiss: () -> Unit = {}
 ) {
@@ -62,6 +71,19 @@ fun AppBlockScreen(
     val blockedPackages by viewModel.blockedPackages.collectAsState()
 
     var isServiceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var searchField by remember { mutableStateOf(TextFieldValue("")) }
+    val normalizedQuery = normalizeSearchQuery(searchField.text)
+
+    val filteredApps = if (normalizedQuery.isEmpty()) {
+        viewModel.installedApps
+    } else {
+        viewModel.installedApps.filter { app ->
+            app.appName.contains(normalizedQuery, ignoreCase = true) ||
+                    app.packageName.contains(normalizedQuery, ignoreCase = true)
+        }
+    }
+
+    val question by quizVM.question.observeAsState(null)
 
     val settings = viewModel.appBlockSettings
     val sessionMinutesCurrent = (settings.sessionLimitMs / 60_000L).coerceAtLeast(1L)
@@ -94,6 +116,23 @@ fun AppBlockScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+
+        Button(
+            onClick = { quizVM.loadRandomQuestion() },
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        ) {
+            Text(
+                text = "Génère une question",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Text(
+            text = question?.question ?: "",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
 
         if (!isServiceEnabled) {
             Card(
@@ -134,12 +173,12 @@ fun AppBlockScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Activer le temps d'utilisation systeme",
+                        text = "Activer le temps d'utilisation système",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Autorise l'acces aux donnees d'utilisation pour afficher le temps passe par app aujourd'hui.",
+                        text = "Autorise l'accès aux données d'utilisation pour afficher le temps passé par application aujourd'hui.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     TextButton(
@@ -147,19 +186,52 @@ fun AppBlockScreen(
                             context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                         }
                     ) {
-                        Text("Ouvrir l'acces d'utilisation")
+                        Text("Ouvrir l'accès d'utilisation")
                     }
                 }
             }
         }
+
+        OutlinedTextField(
+            value = searchField,
+            onValueChange = { newValue ->
+                val cleaned = normalizeSearchQuery(newValue.text)
+                searchField = if (cleaned.isEmpty()) {
+                    TextFieldValue("")
+                } else {
+                    newValue.copy(text = cleaned)
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            placeholder = { Text("Rechercher une application...") },
+            leadingIcon = {
+                Icon(Icons.Default.Search, contentDescription = null)
+            },
+            trailingIcon = {
+                if (normalizedQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchField = TextFieldValue("") }) {
+                        Icon(Icons.Default.Close, contentDescription = "Effacer")
+                    }
+                }
+            },
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+            )
+        )
+
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(viewModel.installedApps, key = { it.packageName }) { app ->
-                val isBlocked = blockedPackages.contains(app.packageName)
+            items(filteredApps, key = { it.packageName }) { app ->
+
+            val isBlocked = blockedPackages.contains(app.packageName)
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -305,6 +377,13 @@ fun AppBlockScreen(
             }
         )
     }
+}
+
+private fun normalizeSearchQuery(value: String): String {
+    // Nettoie les caractères invisibles injectés par certains IME.
+    return value
+        .replace(Regex("[\\u200B-\\u200D\\uFEFF\\u2060]"), "")
+        .trim()
 }
 
 private fun isAccessibilityServiceEnabled(context: Context): Boolean {

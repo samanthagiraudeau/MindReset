@@ -1,0 +1,25 @@
+[
+  {
+    "type": "QCM",
+    "question": "Quelle est la capitale de la Norvège ?",
+    "choices": ["Stockholm", "Oslo", "Copenhague", "Helsinki"],
+    "answer": "Oslo",
+    "category": "Géographie",
+    "difficulty": 1
+  },
+  {
+    "type": "TEXT",
+    "question": "Qui a écrit Le Petit Prince ?",
+    "answer": "Antoine de Saint-Exupéry",
+    "category": "Littérature",
+    "difficulty": 2
+  },
+  {
+    "type": "QCM",
+    "question": "Quel est le plus grand organe du corps humain ?",
+    "choices": ["Le foie", "La peau", "Le cerveau", "Les poumons"],
+    "answer": "La peau",
+    "category": "Sciences",
+    "difficulty": 3
+  }
+]
